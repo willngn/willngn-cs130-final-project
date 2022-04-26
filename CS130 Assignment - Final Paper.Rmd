@@ -1,0 +1,116 @@
+```{r}
+load("~/Downloads/datamatch.RData")
+head(datamatch)
+# 1502 observations
+```
+```{r}
+# load necessary libraries
+library(MatchIt)
+library(Matching)
+library(rgenoud)
+
+```
+```{r}
+# only get necessary columns - covariates + treatment + 1 outcome
+data_new <- datamatch[, c(2, 3, 4, 5, 6, 7, 8, 9, 17)]
+head(data_new)
+```
+```{r}
+# drop missing values
+data_omit <- na.omit(data_new)
+head(data_omit)
+# 1409 observations
+```
+```{r}
+### REPLICATION: Table 2 - Pre-Matching
+
+datamatch[, 10:18][is.na(datamatch[, 10:18]) == "TRUE"] <- 99999
+datamatch <- na.omit(datamatch)
+
+EV <- datamatch[2]
+
+covariates <- datamatch[c("age.group", "educ", "white.collar", "not.full.time", "male", "tech", "pol.info")]
+covariate.lbls <- names(covariates)
+
+n.covariates <- dim(covariates)[2]
+
+tab2.pre <- matrix(NA, nrow = n.covariates, ncol = 4)
+rownames(tab2.pre) <- covariate.lbls
+colnames(tab2.pre) <- c("ev", "tv", "diff", "pvalue")
+
+tab2.pre[, 1:2] <- cbind(apply(covariates[EV == 1,], 2, mean), apply(covariates[EV == 0,], 2, mean))
+tab2.pre[, 3] <- tab2.pre[, 1] - tab2.pre[, 2]
+
+for (i in c(1, 2, 6, 7)){
+  tab2.pre[i, 4] <- ks.boot(covariates[, i][EV == 1], covariates[, i][EV == 0], nboots = 500)$ks.boot.pvalue
+}
+for (i in c(3, 4, 5)){
+  tab2.pre[i, 4] <- prop.test(table(covariates[, i], EV$EV), n = apply(table(covariates[,i],EV$EV),2, sum))$p.value
+}
+print(tab2.pre)
+```
+
+```{r}
+# REPLICATION: Propensity Score Matching
+
+# logistical regression - propensity scores
+logit <- glm(EV ~ age.group + I(age.group^2) + I(age.group^3) + age.group:educ + age.group:tech + educ + I(educ^2) + tech + I(tech^2) + pol.info + educ:pol.info + age.group:pol.info + tech:pol.info + white.collar + not.full.time + male, data = datamatch, family = "binomial")
+
+# matching
+X <- logit$fitted
+Y <- datamatch$agree.evoting
+Tr <- datamatch$EV
+
+rr0 <- Match(Y=Y, Tr=Tr, X=X, caliper = 0.05)
+
+# check covariate balance
+mb_psm0 <- MatchBalance(EV ~ age.group + educ + white.collar + not.full.time + male + tech + pol.info, data = datamatch, match.out = rr0)
+```
+
+
+```{r}
+summary(rr0)
+```
+```{r}
+# REPEAT with simpler model! And newly cleaned data!
+# logistical regression - propensity scores
+logit1 <- glm(EV ~ age.group + educ + tech  + pol.info + white.collar + not.full.time + male, data = data_omit, family = "binomial")
+
+# matching
+X1 <- logit1$fitted
+Y1 <- data_omit$agree.evoting
+Tr1 <- data_omit$EV
+
+rr1 <- Match(Y=Y1, Tr=Tr1, X=X1, caliper = 0.01, BiasAdjust = TRUE)
+
+# check covariate balance
+mb_psm1 <- MatchBalance(EV ~ age.group + educ + white.collar + not.full.time + male + tech + pol.info, data = data_omit, match.out = rr1, nboots = 2000)
+```
+```{r}
+summary(rr1)
+```
+
+```{r}
+# EXTENSION: Genetic Matching
+set.seed(34664)
+# the model like the original paper
+genout <- GenMatch(Tr = data_omit$EV, X = cbind(data_omit$age.group, data_omit$educ, data_omit$male, data_omit$tech, data_omit$pol.info, data_omit$white.collar, data_omit$not.full.time), pop.size = 20, nboots = 500) # increase the number of bootstraps to increase the quality of matching
+mout <- Match(Y = data_omit$agree.evoting, Tr = data_omit$EV, X = cbind(data_omit$age.group, data_omit$educ, data_omit$male, data_omit$tech, data_omit$pol.info, data_omit$white.collar, data_omit$not.full.time), Weight.matrix = genout)
+mb_gm <- MatchBalance(EV ~ age.group + educ + male + tech + pol.info + white.collar + not.full.time, data = data_omit, match.out = mout)
+```
+
+```{r}
+summary(mout)
+```
+```{r}
+# EXACT MATCHING ON BINARY VARIABLE
+set.seed(34664)
+# we impose EXACT Matching on Male, White Collar and Not Full Time!
+genout1 <- GenMatch(Tr = data_omit$EV, X = cbind(data_omit$age.group, data_omit$educ, data_omit$male, data_omit$tech, data_omit$pol.info, data_omit$white.collar, data_omit$not.full.time), exact = c(FALSE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE), pop.size = 20, nboots = 500) # increase the number of bootstraps to increase the quality of matching
+mout1 <- Match(Y = data_omit$agree.evoting, Tr = data_omit$EV, X = cbind(data_omit$age.group, data_omit$educ, data_omit$male, data_omit$tech, data_omit$pol.info, data_omit$white.collar, data_omit$not.full.time), Weight.matrix = genout1)
+mb_gm1 <- MatchBalance(EV ~ age.group + educ + male + tech + pol.info + white.collar + not.full.time, data = data_omit, match.out = mout1)
+```
+```{r}
+summary(mout1)
+```
+
